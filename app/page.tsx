@@ -1,3 +1,4 @@
+"use client";
 import React, { useMemo, useState } from "react";
 import { Search, RefreshCw, BarChart3, Lock, LogOut } from "lucide-react";
 
