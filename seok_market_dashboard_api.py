@@ -78,7 +78,7 @@ def load_rows_from_db() -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     for r in rows:
         row = dict(r)
-        # event_analysis_20d 구조에 맞춘 임시 매핑
+
         event_high_rate = float(row.get("event_high_rate", 0) or 0)
         event_close_rate = float(row.get("event_close_rate", 0) or 0)
         min_low_day = float(row.get("min_low_day", 0) or 0)
@@ -90,7 +90,7 @@ def load_rows_from_db() -> list[dict[str, Any]]:
 
         result.append(
             {
-                "code": row.get("code", ""),
+                "code": str(row.get("code", "")).zfill(6),
                 "name": row.get("name", ""),
                 "market": row.get("market", "KOSPI"),
                 "eventDate": row.get("date", ""),
@@ -113,14 +113,33 @@ def load_rows_from_db() -> list[dict[str, Any]]:
 
 
 def enrich_item(item: dict[str, Any]) -> dict[str, Any]:
-    current_rate = calc_current_rate(float(item.get("currentPrice", 0) or 0), float(item.get("eventHighPrice", 0) or 0))
+    event_high_price = float(item.get("eventHighPrice", 0) or 0)
+    current_rate = calc_current_rate(
+        float(item.get("currentPrice", 0) or 0),
+        event_high_price,
+    )
+
     out = dict(item)
     out["band"] = get_band(float(item.get("eventHighRate", 0) or 0))
     out["currentRate"] = current_rate
     out["score"] = make_score(item, current_rate)
-    out["timingStatus"] = make_timing_status(float(item.get("elapsedDays", 0) or 0), float(item.get("avgLowDay", 0) or 0))
+    out["timingStatus"] = make_timing_status(
+        float(item.get("elapsedDays", 0) or 0),
+        float(item.get("avgLowDay", 0) or 0),
+    )
+
+    avg_min_low_pct = float(item.get("avgMinLowPct", 0) or 0)
+
+    # 실제 최저점 퍼센트 컬럼이 아직 없으면 임시로 평균 저점보다 5% 더 깊게 가정
+    worst_min_low_pct = float(item.get("worstMinLowPct", avg_min_low_pct - 5.0) or 0)
+
+    out["avgLowTargetPrice"] = pct_to_price(event_high_price, avg_min_low_pct)
+    out["worstMinLowPct"] = worst_min_low_pct
+    out["worstLowTargetPrice"] = pct_to_price(event_high_price, worst_min_low_pct)
+
     out["daysToHighBreak"] = float(item.get("avgHighDay", 0) or 0)
-    out["daysToCloseBreak"] = float(item.get("avgHighDay", 0) or 0)
+    out["daysToCloseBreak"] = float(item.get("avgDaysToCloseRebreak", 0) or 0)
+
     return out
 
 
@@ -128,7 +147,10 @@ def filtered_candidates() -> list[dict[str, Any]]:
     rows = load_rows_from_db()
     items: list[dict[str, Any]] = []
     for item in rows:
-        if not is_near_average_low_day(float(item.get("elapsedDays", 0) or 0), float(item.get("avgLowDay", 0) or 0)):
+        if not is_near_average_low_day(
+            float(item.get("elapsedDays", 0) or 0),
+            float(item.get("avgLowDay", 0) or 0),
+        ):
             continue
         items.append(enrich_item(item))
     items.sort(key=lambda x: float(x.get("score", 0) or 0), reverse=True)
@@ -191,43 +213,79 @@ def login() -> Any:
     if not matched:
         return jsonify({"ok": False, "message": "허용되지 않은 계정이거나 비밀번호가 맞지 않는다."}), 401
 
+    session["user"] = matched
     return jsonify({"ok": True, "user": matched})
+
+
+@app.post("/api/logout")
+def logout() -> Any:
+    session.pop("user", None)
+    return jsonify({"ok": True})
+
+
+@app.get("/api/me")
+def me() -> Any:
+    user = session.get("user")
+    if not user:
+        return jsonify({"ok": False, "user": None}), 401
+    return jsonify({"ok": True, "user": user})
 
 
 @app.get("/api/candidates/today")
 def api_candidates_today() -> Any:
+    _, err = require_login()
+    if err:
+        return err
+
     items = filtered_candidates()
-    return jsonify({"items": items, "count": len(items)})
+    return jsonify({"ok": True, "items": items, "count": len(items)})
 
 
-@app.get("/api/stocks/search")
-def api_stocks_search() -> Any:
-    q = str(request.args.get("q", "")).strip().lower()
-    if not q:
-        return jsonify({"items": [], "count": 0})
+@app.get("/api/candidates/search")
+def api_candidates_search() -> Any:
+    _, err = require_login()
+    if err:
+        return err
+
+    keyword = str(request.args.get("keyword", "")).strip().lower()
+    if not keyword:
+        return jsonify({"ok": True, "items": [], "count": 0, "keyword": ""})
 
     rows = [enrich_item(x) for x in load_rows_from_db()]
     items = []
+
     for item in rows:
-        text = " ".join([
-            str(item.get("code", "")),
-            str(item.get("name", "")),
-            str(item.get("market", "")),
-            str(item.get("dnaType", "")),
-            str(item.get("band", "")),
-        ]).lower()
-        if q in text:
+        text = " ".join(
+            [
+                str(item.get("code", "")),
+                str(item.get("name", "")),
+                str(item.get("market", "")),
+                str(item.get("dnaType", "")),
+                str(item.get("band", "")),
+            ]
+        ).lower()
+
+        if keyword in text:
             items.append(item)
-    return jsonify({"items": items, "count": len(items)})
+
+    items.sort(key=lambda x: float(x.get("score", 0) or 0), reverse=True)
+    items = items[:20]
+
+    return jsonify({"ok": True, "items": items, "count": len(items), "keyword": keyword})
 
 
 @app.get("/api/market/status")
 def api_market_status() -> Any:
+    _, err = require_login()
+    if err:
+        return err
+
     items = filtered_candidates()
     kospi = build_market_summary(items, "KOSPI")
     kosdaq = build_market_summary(items, "KOSDAQ")
     return jsonify({
-        "updatedAt": __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "ok": True,
+        "updatedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "kospi": kospi,
         "kosdaq": kosdaq,
     })
@@ -235,11 +293,16 @@ def api_market_status() -> Any:
 
 @app.get("/api/dashboard")
 def api_dashboard() -> Any:
+    _, err = require_login()
+    if err:
+        return err
+
     items = filtered_candidates()
     kospi = build_market_summary(items, "KOSPI")
     kosdaq = build_market_summary(items, "KOSDAQ")
     return jsonify({
-        "updatedAt": __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "ok": True,
+        "updatedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "market": {
             "kospi": kospi,
             "kosdaq": kosdaq,
@@ -253,11 +316,17 @@ def api_dashboard() -> Any:
 
 @app.post("/api/run-update")
 def api_run_update() -> Any:
+    _, err = require_login()
+    if err:
+        return err
     return jsonify({"ok": True, "message": "업데이트 실행 자리 - 여기서 일봉/시장상황 갱신 연결"})
 
 
 @app.post("/api/run-analysis")
 def api_run_analysis() -> Any:
+    _, err = require_login()
+    if err:
+        return err
     return jsonify({"ok": True, "message": "분석 실행 자리 - 여기서 밴드 DNA / 돌파일 계산 연결"})
 
 

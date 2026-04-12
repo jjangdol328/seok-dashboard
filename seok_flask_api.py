@@ -9,8 +9,8 @@ CORS(app)
 
 # 형이 허용한 사용자만 통과
 ALLOWED_USERS = [
-    {"username": "seok", "password": "1234", "displayName": "형", "role": "owner"},
-    {"username": "brother", "password": "1234", "displayName": "형 동생", "role": "member"},
+    {"username": "seok", "password": "ghftmd", "displayName": "나", "role": "owner"},
+    {"username": "won", "password": "ghftmd", "displayName": "형", "role": "member"},
 ]
 
 # 지금은 샘플 데이터
@@ -62,7 +62,6 @@ def load_stocks_from_db():
     return result
 
 
-RAW_STOCKS = load_stocks_from_db()
 
 # 🔥 계산 함수들 (누락된 부분 복구)
 

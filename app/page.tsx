@@ -27,6 +27,9 @@ type CandidateRow = {
   timingStatus?: string;
   daysToHighBreak?: number;
   daysToCloseBreak?: number;
+  avgLowTargetPrice?: number;
+  worstMinLowPct?: number;
+  worstLowTargetPrice?: number;
 };
 
 type LoginUser = {
@@ -38,57 +41,59 @@ type LoginUser = {
 type LoginResponse = {
   ok: boolean;
   message?: string;
-  user?: LoginUser;
+  user?: LoginUser | null;
 };
 
-type MarketSummary = {
-  market: "KOSPI" | "KOSDAQ";
-  changePct: number;
-  score: number;
-  mood: "강세" | "횡보" | "약세";
-  sampleCount: number;
-  suggestedPullback: string;
+type SearchResponse = {
+  ok: boolean;
+  message?: string;
+  keyword?: string;
+  count: number;
+  items: CandidateRow[];
 };
 
-type DashboardResponse = {
-  updatedAt: string;
-  market: {
-    kospi: MarketSummary;
-    kosdaq: MarketSummary;
-  };
-  candidates: {
-    items: CandidateRow[];
-    count: number;
-  };
-};
+const API_BASE = "http://127.0.0.1:5000";
 
 function formatSignedPercent(value: number | undefined) {
-  const n = Number(value || 0);
+  const n = Number(value ?? 0);
   return `${n > 0 ? "+" : ""}${n.toFixed(2)}%`;
 }
 
+function formatPrice(value: number | undefined) {
+  const n = Number(value ?? 0);
+  return `${n.toLocaleString("ko-KR")}원`;
+}
+
 function formatEok(value: number | undefined) {
-  const n = Number(value || 0);
+  const n = Number(value ?? 0);
   return `${(n / 100000000).toFixed(0)}억`;
 }
 
-function getBandColor(band: string | undefined) {
+function getBandColor(band?: string) {
   switch (band) {
     case "화":
       return "bg-rose-100 text-rose-700 border-rose-200";
     case "수":
-      return "bg-yellow-100 text-yellow-700 border-yellow-200";
+      return "bg-yellow-100 text-yellow-700 border-yellow-300";
     case "목":
-      return "bg-yellow-200 text-yellow-800 border-yellow-300";
+      return "bg-amber-100 text-amber-700 border-amber-300";
     case "금":
-      return "bg-amber-800 text-amber-100 border-amber-700";
+      return "bg-orange-100 text-orange-700 border-orange-300";
     case "토":
-      return "bg-sky-100 text-sky-700 border-sky-200";
+      return "bg-sky-100 text-sky-700 border-sky-300";
     case "LIMIT_UP":
-      return "bg-violet-100 text-violet-700 border-violet-200";
+      return "bg-violet-100 text-violet-700 border-violet-300";
     default:
-      return "bg-slate-100 text-slate-700 border-slate-200";
+      return "bg-slate-100 text-slate-700 border-slate-300";
   }
+}
+
+function getScoreColor(score?: number) {
+  const n = Number(score ?? 0);
+  if (n >= 70) return "text-emerald-600";
+  if (n >= 55) return "text-sky-600";
+  if (n >= 40) return "text-amber-600";
+  return "text-slate-500";
 }
 
 function bandLabel(rate: number) {
@@ -100,140 +105,195 @@ function bandLabel(rate: number) {
   return "상한가 DNA";
 }
 
-function MiniChip({ children, className = "" }: { children: React.ReactNode; className?: string }) {
-  return <span className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-semibold ${className}`}>{children}</span>;
+function MiniChip({
+  children,
+  className = "",
+}: {
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <span
+      className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-semibold ${className}`}
+    >
+      {children}
+    </span>
+  );
 }
 
-function MoodChip({ mood }: { mood: MarketSummary["mood"] }) {
-  const cls = mood === "강세"
-    ? "bg-emerald-100 text-emerald-700 border-emerald-200"
-    : mood === "횡보"
-      ? "bg-slate-100 text-slate-700 border-slate-200"
-      : "bg-rose-100 text-rose-700 border-rose-200";
-  return <MiniChip className={cls}>{mood}</MiniChip>;
+function ValueCard({
+  label,
+  value,
+  sub,
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+}) {
+  return (
+    <div className="rounded-2xl bg-slate-50 p-4">
+      <div className="text-xs text-slate-400">{label}</div>
+      <div className="mt-2 text-2xl font-black tracking-tight text-slate-900">
+        {value}
+      </div>
+      {sub ? <div className="mt-1 text-xs text-slate-500">{sub}</div> : null}
+    </div>
+  );
 }
 
-function Panel({ title, desc, value }: { title: string; desc: string; value: string }) {
+function ResultCard({ item }: { item: CandidateRow }) {
+  const scoreClass = getScoreColor(item.score);
+
   return (
     <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="text-sm text-slate-500">{title}</div>
-      <div className="mt-2 text-4xl font-black tracking-tight text-slate-900">{value}</div>
-      <div className="mt-3 text-sm text-slate-500">{desc}</div>
-    </div>
-  );
-}
-
-function MarketBox({ item }: { item: MarketSummary }) {
-  return (
-    <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div>
-          <div className="text-xs font-semibold text-slate-500">시장 흐름</div>
-          <div className="mt-1 text-2xl font-black tracking-tight text-slate-900">{item.market}</div>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="text-2xl font-black tracking-tight text-slate-900">
+              {item.name}
+            </div>
+            <MiniChip className={getBandColor(item.band)}>{item.band || "없음"}</MiniChip>
+            <MiniChip className="bg-slate-100 text-slate-700 border-slate-300">
+              {item.market}
+            </MiniChip>
+            <MiniChip className="bg-indigo-50 text-indigo-700 border-indigo-200">
+              {item.timingStatus || "없음"}
+            </MiniChip>
+          </div>
+
+          <div className="mt-2 text-sm text-slate-500">
+            {item.code} · 이벤트일 {item.eventDate}
+          </div>
         </div>
-        <MoodChip mood={item.mood} />
+
+        <div className="rounded-2xl bg-slate-50 px-5 py-4 text-right">
+          <div className="text-xs text-slate-400">DNA 점수</div>
+          <div className={`mt-1 text-4xl font-black tracking-tight ${scoreClass}`}>
+            {Number(item.score ?? 0).toFixed(1)}
+          </div>
+        </div>
       </div>
-      <div className="mt-4 flex items-end justify-between gap-4">
-        <div>
-          <div className="text-3xl font-black tracking-tight text-slate-900">{formatSignedPercent(item.changePct)}</div>
-          <div className="mt-1 text-xs text-slate-500">시장 점수 {item.score.toFixed(1)}</div>
-        </div>
-        <div className="text-right text-xs text-slate-500">
-          <div>표본 {item.sampleCount}개</div>
-          <div className="mt-1">권장 눌림폭 {item.suggestedPullback}</div>
-        </div>
+
+      <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <ValueCard
+          label="이벤트 고가상승률"
+          value={formatSignedPercent(item.eventHighRate)}
+          sub={bandLabel(Number(item.eventHighRate || 0))}
+        />
+        <ValueCard
+          label="현재 등락률"
+          value={formatSignedPercent(item.currentRate)}
+          sub={`현재가 ${formatPrice(item.currentPrice)}`}
+        />
+        <ValueCard
+          label="평균 저점 자리"
+          value={`${formatSignedPercent(item.avgMinLowPct)} / ${formatPrice(item.avgLowTargetPrice)}`}
+          sub={`평균 저점일 ${Number(item.avgLowDay ?? 0).toFixed(1)}일`}
+        />
+        <ValueCard
+          label="최저점 자리"
+          value={`${formatSignedPercent(item.worstMinLowPct)} / ${formatPrice(item.worstLowTargetPrice)}`}
+          sub="최악 눌림 대비 기준"
+        />
+        <ValueCard
+          label="평균 고점 구간"
+          value={`${Number(item.avgHighDay ?? 0).toFixed(1)}일`}
+          sub={`평균 최고점 ${formatSignedPercent(item.avgMaxHighPct)}`}
+        />
+      </div>
+
+      <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <ValueCard
+          label="경과일"
+          value={`${Number(item.elapsedDays ?? 0).toFixed(1)}일차`}
+          sub="이벤트 이후 현재 위치"
+        />
+        <ValueCard
+          label="재돌파율"
+          value={`${Number(item.rebreakRate ?? 0).toFixed(1)}%`}
+          sub="2차 상승 성향"
+        />
+        <ValueCard
+          label="이벤트 거래대금"
+          value={formatEok(item.eventValue)}
+          sub="당시 자금 강도"
+        />
+        <ValueCard
+          label="DNA 타입"
+          value={item.dnaType || "없음"}
+          sub={`고점 예상 ${Number(item.daysToHighBreak ?? 0).toFixed(1)}일`}
+        />
       </div>
     </div>
   );
 }
 
-function SectionTitle({ title, desc }: { title: string; desc: string }) {
+function LoginScreen({
+  username,
+  password,
+  setUsername,
+  setPassword,
+  onLogin,
+  loading,
+  error,
+}: {
+  username: string;
+  password: string;
+  setUsername: (v: string) => void;
+  setPassword: (v: string) => void;
+  onLogin: () => void;
+  loading: boolean;
+  error: string;
+}) {
   return (
-    <div>
-      <div className="text-sm font-semibold text-slate-500">{desc}</div>
-      <div className="mt-1 text-2xl font-black tracking-tight text-slate-900">{title}</div>
-    </div>
-  );
-}
-
-function DNAHero({ topBand, count, updatedAt, market }: { topBand: CandidateRow[]; count: number; updatedAt: string; market: { kospi: MarketSummary; kosdaq: MarketSummary } }) {
-  return (
-    <div className="grid gap-6 xl:grid-cols-[1.35fr_0.9fr]">
-      <div className="rounded-[28px] border border-slate-200 bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800 p-7 text-white shadow-xl">
-        <div className="flex flex-wrap items-center gap-2">
-          <MiniChip className="border-white/15 bg-white/10 text-white">SEOK</MiniChip>
-          <MiniChip className="border-cyan-400/30 bg-cyan-400/10 text-cyan-200">밴드 DNA 중심</MiniChip>
-          <MiniChip className="border-white/15 bg-white/10 text-slate-100">일봉 + 시장상황</MiniChip>
+    <div className="min-h-screen bg-slate-100 px-4 py-10 text-slate-900">
+      <div className="mx-auto max-w-md rounded-[32px] border border-slate-200 bg-white p-8 shadow-xl">
+        <div className="flex items-center gap-2">
+          <MiniChip className="border-slate-900 bg-slate-900 text-white">SEOK</MiniChip>
+          <MiniChip className="border-slate-300 bg-slate-100 text-slate-700">
+            비공개 종목검색
+          </MiniChip>
         </div>
-        <h1 className="mt-5 text-4xl font-black leading-tight tracking-tight md:text-5xl">
-          이벤트 기준 밴드가 이어지고
-          <br />
-          저가·고가·돌파일을 같이 보게 다시 정리했다
-        </h1>
-        <p className="mt-5 max-w-2xl text-sm leading-7 text-slate-300 md:text-base">
-          이벤트일 고가상승률로 밴드를 고정하고, 평균 저점일과 평균 고점일을 같이 본다.
-          저가 자리에서 얼마나 눌렸는지, 고가를 몇 일 만에 다시 돌파하는지, 종가 기준 돌파일 성격까지 한 화면에 보이게 재구성했다.
+
+        <h1 className="mt-5 text-3xl font-black tracking-tight">로그인</h1>
+        <p className="mt-2 text-sm leading-6 text-slate-500">
+          형이 허용한 아이디만 들어오게 만든 화면이다.
         </p>
-        <div className="mt-8 grid gap-3 sm:grid-cols-3">
-          <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-            <div className="text-xs text-slate-300">오늘 후보</div>
-            <div className="mt-2 text-3xl font-black">{count}개</div>
-          </div>
-          <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-            <div className="text-xs text-slate-300">핵심 기준</div>
-            <div className="mt-2 text-lg font-bold">밴드 → 저점일 → 고점 돌파일</div>
-          </div>
-          <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-            <div className="text-xs text-slate-300">최근 업데이트</div>
-            <div className="mt-2 text-lg font-bold">{updatedAt}</div>
-          </div>
-        </div>
-      </div>
 
-      <div className="space-y-4">
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-1">
-          <MarketBox item={market.kospi} />
-          <MarketBox item={market.kosdaq} />
-        </div>
+        <div className="mt-6 space-y-4">
+          <input
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") onLogin();
+            }}
+            className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
+            placeholder="아이디"
+          />
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") onLogin();
+            }}
+            className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
+            placeholder="비밀번호"
+          />
 
-        <div className="rounded-[28px] border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="flex items-center justify-between">
-            <SectionTitle title="후보 톱 3" desc="오늘 밴드 DNA 상위" />
-            <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">점수 기준</div>
-          </div>
-          <div className="mt-5 space-y-3">
-            {topBand.map((item) => (
-              <div key={`${item.code}-${item.eventDate}`} className="rounded-2xl border border-slate-200 p-4">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <div className="text-base font-bold text-slate-900">{item.name}</div>
-                      <MiniChip className={getBandColor(item.band)}>{item.band}</MiniChip>
-                    </div>
-                    <div className="mt-1 text-xs text-slate-500">{item.code} · {item.market}</div>
-                  </div>
-                  <div className="text-right">
-                    <div className="text-xs text-slate-500">DNA 점수</div>
-                    <div className="text-2xl font-black tracking-tight text-slate-900">{Number(item.score || 0).toFixed(1)}</div>
-                  </div>
-                </div>
-                <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs">
-                  <div className="rounded-xl bg-slate-50 px-2 py-3">
-                    <div className="text-slate-400">이벤트 고가</div>
-                    <div className="mt-1 font-bold text-slate-900">{formatSignedPercent(item.eventHighRate)}</div>
-                  </div>
-                  <div className="rounded-xl bg-slate-50 px-2 py-3">
-                    <div className="text-slate-400">현재 위치</div>
-                    <div className="mt-1 font-bold text-slate-900">{formatSignedPercent(item.currentRate)}</div>
-                  </div>
-                  <div className="rounded-xl bg-slate-50 px-2 py-3">
-                    <div className="text-slate-400">평균 저점일</div>
-                    <div className="mt-1 font-bold text-slate-900">{item.avgLowDay}일</div>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
+          {error ? (
+            <div className="rounded-2xl bg-rose-50 px-4 py-3 text-sm text-rose-700">
+              {error}
+            </div>
+          ) : null}
+
+          <button
+            onClick={onLogin}
+            disabled={loading}
+            className="w-full rounded-2xl bg-slate-900 px-4 py-3 text-sm font-bold text-white disabled:opacity-60"
+          >
+            {loading ? "로그인 중..." : "로그인"}
+          </button>
         </div>
       </div>
     </div>
@@ -241,247 +301,273 @@ function DNAHero({ topBand, count, updatedAt, market }: { topBand: CandidateRow[
 }
 
 export default function Page() {
+  const [user, setUser] = useState<LoginUser | null>(null);
+  const [checkingAuth, setCheckingAuth] = useState(true);
+
   const [username, setUsername] = useState("seok");
   const [password, setPassword] = useState("1234");
-  const [user, setUser] = useState<LoginUser | null>(null);
   const [loginError, setLoginError] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [rows, setRows] = useState<CandidateRow[]>([]);
+  const [loginLoading, setLoginLoading] = useState(false);
+
   const [search, setSearch] = useState("");
-  const [updatedAt, setUpdatedAt] = useState("방금");
-  const [market, setMarket] = useState<{ kospi: MarketSummary; kosdaq: MarketSummary }>({
-    kospi: { market: "KOSPI", changePct: 0, score: 0, mood: "횡보", sampleCount: 0, suggestedPullback: "3~4%" },
-    kosdaq: { market: "KOSDAQ", changePct: 0, score: 0, mood: "횡보", sampleCount: 0, suggestedPullback: "3~4%" },
-  });
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchMessage, setSearchMessage] = useState("");
+  const [rows, setRows] = useState<CandidateRow[]>([]);
 
-  const apiBase = "http://127.0.0.1:5000";
-
-  const fetchDashboard = async () => {
-    const res = await fetch(`${apiBase}/api/dashboard`);
-    const data: DashboardResponse = await res.json();
-    setRows(data.candidates.items || []);
-    setUpdatedAt(data.updatedAt || "방금");
-    setMarket(data.market);
-  };
+  const topOne = useMemo(() => rows[0] ?? null, [rows]);
 
   useEffect(() => {
-    if (user) {
-      fetchDashboard().catch(() => undefined);
-    }
-  }, [user]);
+    const checkMe = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/me`, {
+          credentials: "include",
+        });
+
+        const data: LoginResponse = await res.json();
+
+        if (res.ok && data.ok && data.user) {
+          setUser(data.user);
+        } else {
+          setUser(null);
+        }
+      } catch {
+        setUser(null);
+      } finally {
+        setCheckingAuth(false);
+      }
+    };
+
+    checkMe();
+  }, []);
 
   const handleLogin = async () => {
-    setLoading(true);
+    setLoginLoading(true);
     setLoginError("");
+
     try {
-      const res = await fetch(`${apiBase}/api/login`, {
+      const res = await fetch(`${API_BASE}/api/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ username, password }),
       });
+
       const data: LoginResponse = await res.json();
+
       if (!res.ok || !data.ok || !data.user) {
         setLoginError(data.message || "로그인 실패");
         return;
       }
+
       setUser(data.user);
     } catch {
-      setLoginError("Flask 서버 연결 실패");
+      setLoginError("서버 연결 실패");
     } finally {
-      setLoading(false);
+      setLoginLoading(false);
     }
   };
 
-  const handleLogout = () => {
-    setUser(null);
-    setSearch("");
-    setLoginError("");
+  const handleLogout = async () => {
+    try {
+      await fetch(`${API_BASE}/api/logout`, {
+        method: "POST",
+        credentials: "include",
+      });
+    } catch {
+      // 무시
+    } finally {
+      setUser(null);
+      setRows([]);
+      setSearch("");
+      setSearchMessage("");
+    }
   };
 
-  const visibleRows = useMemo(() => {
-    const keyword = search.trim().toLowerCase();
-    if (!keyword) return rows;
-    return rows.filter((item) =>
-      [item.name, item.code, item.market, item.band, item.dnaType].join(" ").toLowerCase().includes(keyword)
+  const runSearch = async () => {
+    const keyword = search.trim();
+
+    if (!keyword) {
+      setSearchMessage("종목명 또는 종목코드를 입력해라");
+      setRows([]);
+      return;
+    }
+
+    setSearchLoading(true);
+    setSearchMessage("");
+
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/candidates/search?keyword=${encodeURIComponent(keyword)}`,
+        {
+          credentials: "include",
+        }
+      );
+
+      const data: SearchResponse = await res.json();
+
+      if (res.status === 401) {
+        setUser(null);
+        setRows([]);
+        setSearchMessage("로그인이 풀렸다. 다시 로그인해라");
+        return;
+      }
+
+      if (!res.ok || !data.ok) {
+        setRows([]);
+        setSearchMessage(data.message || "검색 실패");
+        return;
+      }
+
+      setRows(data.items || []);
+      setSearchMessage(`검색 결과 ${data.count}건`);
+    } catch {
+      setRows([]);
+      setSearchMessage("검색 중 서버 연결 실패");
+    } finally {
+      setSearchLoading(false);
+    }
+  };
+
+  const clearSearch = () => {
+    setSearch("");
+    setRows([]);
+    setSearchMessage("");
+  };
+
+  if (checkingAuth) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-100 text-slate-500">
+        확인 중...
+      </div>
     );
-  }, [rows, search]);
-
-  const topBand = useMemo(
-    () => [...visibleRows].sort((a, b) => Number(b.score || 0) - Number(a.score || 0)).slice(0, 3),
-    [visibleRows]
-  );
-
-  const bandSummary = useMemo(() => {
-    const map = new Map<string, number>();
-    visibleRows.forEach((item) => map.set(item.band || "없음", (map.get(item.band || "없음") || 0) + 1));
-    return Array.from(map.entries()).sort((a, b) => b[1] - a[1]);
-  }, [visibleRows]);
+  }
 
   if (!user) {
     return (
-      <div className="min-h-screen bg-slate-100 px-4 py-10 text-slate-900">
-        <div className="mx-auto max-w-md rounded-[32px] border border-slate-200 bg-white p-8 shadow-xl">
-          <div className="flex items-center gap-2">
-            <MiniChip className="bg-slate-900 text-white border-slate-900">SEOK</MiniChip>
-            <MiniChip className="bg-slate-100 text-slate-700 border-slate-200">밴드 DNA 대시보드</MiniChip>
-          </div>
-          <h1 className="mt-5 text-3xl font-black tracking-tight">로그인</h1>
-          <p className="mt-2 text-sm leading-6 text-slate-500">허용된 사용자만 밴드 DNA 대시보드에 들어오게 구성했다.</p>
-          <div className="mt-6 space-y-4">
-            <input value={username} onChange={(e) => setUsername(e.target.value)} className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900" placeholder="아이디" />
-            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900" placeholder="비밀번호" />
-            {loginError ? <div className="rounded-2xl bg-rose-50 px-4 py-3 text-sm text-rose-700">{loginError}</div> : null}
-            <button onClick={handleLogin} className="w-full rounded-2xl bg-slate-900 px-4 py-3 text-sm font-bold text-white" disabled={loading}>
-              {loading ? "로그인 중..." : "로그인"}
-            </button>
-          </div>
-        </div>
-      </div>
+      <LoginScreen
+        username={username}
+        password={password}
+        setUsername={setUsername}
+        setPassword={setPassword}
+        onLogin={handleLogin}
+        loading={loginLoading}
+        error={loginError}
+      />
     );
   }
 
   return (
     <div className="min-h-screen bg-slate-100 px-4 py-6 text-slate-900 md:px-6">
-      <div className="mx-auto max-w-7xl space-y-6">
-        <DNAHero topBand={topBand} count={visibleRows.length} updatedAt={updatedAt} market={market} />
-
-        <div className="grid gap-4 md:grid-cols-3">
-          <Panel title="핵심 해석" value="밴드 DNA" desc="이벤트 고가상승률 기반으로 오늘 성격을 먼저 읽는다" />
-          <Panel title="우선 보는 값" value="평균 저점일" desc="시간축으로 지금이 들어갈 자리인지 먼저 본다" />
-          <Panel title="체크 포인트" value="고가·종가 돌파일" desc="평균 고점일과 돌파일 성격을 같이 본다" />
-        </div>
-
-        <div className="grid gap-4 md:grid-cols-3">
-          <Panel title="코스피 분위기" value={market.kospi.mood} desc={`숫자 ${formatSignedPercent(market.kospi.changePct)} · 표본 ${market.kospi.sampleCount}개 · 눌림 ${market.kospi.suggestedPullback}`} />
-          <Panel title="코스닥 분위기" value={market.kosdaq.mood} desc={`숫자 ${formatSignedPercent(market.kosdaq.changePct)} · 표본 ${market.kosdaq.sampleCount}개 · 눌림 ${market.kosdaq.suggestedPullback}`} />
-          <Panel title="업데이트" value="일봉 + 시장상황" desc={`최근 업데이트 ${updatedAt}`} />
-        </div>
-
-        <div className="flex flex-wrap gap-2">
-          <button onClick={() => fetchDashboard()} className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-bold text-white">🔄 업데이트 실행</button>
-          <button className="rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm font-bold text-slate-900">📊 분석 다시 계산</button>
-          <button onClick={handleLogout} className="rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm font-bold text-slate-900">🚪 로그아웃</button>
-        </div>
-
-        <div className="grid gap-6 lg:grid-cols-[0.95fr_1.05fr]">
-          <div className="rounded-[28px] border border-slate-200 bg-white p-6 shadow-sm">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <div className="text-sm font-semibold text-slate-500">밴드 DNA 분포</div>
-                <div className="mt-1 text-2xl font-black tracking-tight">오늘 후보 밴드 맵</div>
+      <div className="mx-auto max-w-6xl space-y-6">
+        <div className="rounded-[28px] border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <MiniChip className="border-slate-900 bg-slate-900 text-white">SEOK</MiniChip>
+                <MiniChip className="border-slate-300 bg-slate-100 text-slate-700">
+                  로그인 사용자: {user.displayName}
+                </MiniChip>
               </div>
-              <MiniChip className="bg-slate-100 text-slate-700 border-slate-200">{visibleRows.length}개</MiniChip>
-            </div>
 
-            <div className="mt-4 grid gap-3 sm:grid-cols-2">
-              <div className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-600">
-                <div className="font-bold text-slate-900">코스피</div>
-                <div className="mt-2">숫자 {formatSignedPercent(market.kospi.changePct)} · {market.kospi.mood}</div>
-                <div className="mt-1">표본 {market.kospi.sampleCount}개 · 눌림 {market.kospi.suggestedPullback}</div>
+              <div className="mt-3 text-3xl font-black tracking-tight text-slate-900">
+                종목 검색만 빠르게 보게 다시 정리했다
               </div>
-              <div className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-600">
-                <div className="font-bold text-slate-900">코스닥</div>
-                <div className="mt-2">숫자 {formatSignedPercent(market.kosdaq.changePct)} · {market.kosdaq.mood}</div>
-                <div className="mt-1">표본 {market.kosdaq.sampleCount}개 · 눌림 {market.kosdaq.suggestedPullback}</div>
+              <div className="mt-2 text-sm text-slate-500">
+                무거운 연산은 로컬에서 돌리고, 여기서는 핵심 값만 조회한다.
               </div>
             </div>
 
-            <div className="mt-6 space-y-3">
-              {bandSummary.map(([band, count]) => (
-                <div key={band} className="rounded-2xl border border-slate-200 p-4">
-                  <div className="flex items-center justify-between gap-4">
-                    <div className="flex items-center gap-3">
-                      <MiniChip className={getBandColor(band)}>{band}</MiniChip>
-                      <div>
-                        <div className="font-bold text-slate-900">{bandLabel(visibleRows.find((v) => (v.band || "없음") === band)?.eventHighRate || 0)}</div>
-                        <div className="text-xs text-slate-500">이벤트 고가상승률 기준 묶음</div>
-                      </div>
-                    </div>
-                    <div className="text-right">
-                      <div className="text-2xl font-black tracking-tight text-slate-900">{count}</div>
-                      <div className="text-xs text-slate-500">후보 수</div>
-                    </div>
-                  </div>
-                </div>
-              ))}
+            <div className="flex gap-2">
+              <button
+                onClick={handleLogout}
+                className="rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm font-bold text-slate-900"
+              >
+                로그아웃
+              </button>
             </div>
           </div>
 
-          <div className="rounded-[28px] border border-slate-200 bg-white p-6 shadow-sm">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-              <div>
-                <div className="text-sm font-semibold text-slate-500">밴드 DNA 검색</div>
-                <div className="mt-1 text-2xl font-black tracking-tight">종목 바로 보기</div>
-              </div>
-              <div className="w-full sm:max-w-sm">
-                <input
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
-                  placeholder="종목명, 코드, 시장, 밴드 검색"
-                />
-              </div>
+          <div className="mt-6 flex flex-col gap-2 sm:flex-row">
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") runSearch();
+              }}
+              className="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
+              placeholder="종목명 또는 종목코드 검색"
+            />
+            <button
+              onClick={runSearch}
+              disabled={searchLoading}
+              className="rounded-2xl bg-slate-900 px-5 py-3 text-sm font-bold text-white disabled:opacity-60"
+            >
+              {searchLoading ? "검색 중..." : "검색"}
+            </button>
+            <button
+              onClick={clearSearch}
+              className="rounded-2xl border border-slate-300 bg-white px-5 py-3 text-sm font-bold text-slate-900"
+            >
+              초기화
+            </button>
+          </div>
+
+          {searchMessage ? (
+            <div className="mt-3 text-sm text-slate-600">{searchMessage}</div>
+          ) : null}
+        </div>
+
+        {topOne ? (
+          <div className="rounded-[28px] border border-slate-200 bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800 p-6 text-white shadow-xl">
+            <div className="flex flex-wrap items-center gap-2">
+              <MiniChip className="border-white/15 bg-white/10 text-white">핵심 종목</MiniChip>
+              <MiniChip className="border-cyan-400/30 bg-cyan-400/10 text-cyan-200">
+                {topOne.name}
+              </MiniChip>
+              <MiniChip className="border-white/15 bg-white/10 text-slate-100">
+                {topOne.code}
+              </MiniChip>
             </div>
 
-            <div className="mt-5 max-h-[520px] space-y-3 overflow-auto pr-1">
-              {visibleRows.map((item) => (
-                <div key={`${item.code}-${item.eventDate}`} className="rounded-2xl border border-slate-200 p-4 transition hover:border-slate-300 hover:shadow-sm">
-                  <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                    <div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <div className="text-lg font-black text-slate-900">{item.name}</div>
-                        <MiniChip className={getBandColor(item.band)}>{item.band}</MiniChip>
-                        <MiniChip className="bg-slate-100 text-slate-700 border-slate-200">{item.market}</MiniChip>
-                      </div>
-                      <div className="mt-1 text-xs text-slate-500">{item.code} · 이벤트일 {item.eventDate}</div>
-                    </div>
-                    <div className="text-right">
-                      <div className="text-xs text-slate-500">DNA 점수</div>
-                      <div className="text-3xl font-black tracking-tight text-slate-900">{Number(item.score || 0).toFixed(1)}</div>
-                    </div>
-                  </div>
-
-                  <div className="mt-4 grid gap-3 md:grid-cols-4">
-                    <div className="rounded-2xl bg-slate-50 p-4">
-                      <div className="text-xs text-slate-400">이벤트 고가상승률</div>
-                      <div className="mt-2 text-2xl font-black tracking-tight text-slate-900">{formatSignedPercent(item.eventHighRate)}</div>
-                      <div className="mt-1 text-xs text-slate-500">{bandLabel(item.eventHighRate)}</div>
-                    </div>
-                    <div className="rounded-2xl bg-slate-50 p-4">
-                      <div className="text-xs text-slate-400">현재등락률</div>
-                      <div className="mt-2 text-2xl font-black tracking-tight text-slate-900">{formatSignedPercent(item.currentRate)}</div>
-                      <div className="mt-1 text-xs text-slate-500">평균 최저점 {formatSignedPercent(item.avgMinLowPct)}</div>
-                    </div>
-                    <div className="rounded-2xl bg-slate-50 p-4">
-                      <div className="text-xs text-slate-400">시간 위치</div>
-                      <div className="mt-2 text-2xl font-black tracking-tight text-slate-900">{item.elapsedDays}일차</div>
-                      <div className="mt-1 text-xs text-slate-500">평균 저점일 {item.avgLowDay}일</div>
-                    </div>
-                    <div className="rounded-2xl bg-slate-50 p-4">
-                      <div className="text-xs text-slate-400">이벤트 거래대금</div>
-                      <div className="mt-2 text-2xl font-black tracking-tight text-slate-900">{formatEok(item.eventValue)}</div>
-                      <div className="mt-1 text-xs text-slate-500">재돌파 {item.rebreakRate}%</div>
-                    </div>
-                  </div>
-
-                  <div className="mt-4 flex flex-wrap items-center gap-2">
-                    <MiniChip className="bg-indigo-50 text-indigo-700 border-indigo-200">{item.timingStatus || "없음"}</MiniChip>
-                    <MiniChip className="bg-slate-100 text-slate-700 border-slate-200">평균 고점일 {item.avgHighDay}일</MiniChip>
-                    <MiniChip className="bg-slate-100 text-slate-700 border-slate-200">평균 최고점 {formatSignedPercent(item.avgMaxHighPct)}</MiniChip>
-                    <MiniChip className="bg-slate-100 text-slate-700 border-slate-200">고가 돌파일 {item.daysToHighBreak || item.avgHighDay}일</MiniChip>
-                    <MiniChip className="bg-slate-100 text-slate-700 border-slate-200">종가 돌파일 {item.daysToCloseBreak || item.avgHighDay}일</MiniChip>
-                    <MiniChip className="bg-slate-100 text-slate-700 border-slate-200">DNA 타입 {item.dnaType || "없음"}</MiniChip>
-                  </div>
+            <div className="mt-5 grid gap-4 md:grid-cols-4">
+              <div>
+                <div className="text-xs text-slate-300">현재 위치</div>
+                <div className="mt-2 text-3xl font-black">
+                  {Number(topOne.elapsedDays ?? 0).toFixed(1)}일차
                 </div>
-              ))}
-
-              {visibleRows.length === 0 ? (
-                <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center text-sm text-slate-500">
-                  밴드 DNA 조건에 맞는 결과가 없다. 검색어를 바꾸거나 백엔드 조건을 확인하면 된다.
+              </div>
+              <div>
+                <div className="text-xs text-slate-300">평균 저점</div>
+                <div className="mt-2 text-3xl font-black">
+                  {Number(topOne.avgLowDay ?? 0).toFixed(1)}일
                 </div>
-              ) : null}
+              </div>
+              <div>
+                <div className="text-xs text-slate-300">재돌파율</div>
+                <div className="mt-2 text-3xl font-black">
+                  {Number(topOne.rebreakRate ?? 0).toFixed(1)}%
+                </div>
+              </div>
+              <div>
+                <div className="text-xs text-slate-300">DNA 점수</div>
+                <div className="mt-2 text-3xl font-black">
+                  {Number(topOne.score ?? 0).toFixed(1)}
+                </div>
+              </div>
             </div>
           </div>
+        ) : null}
+
+        <div className="space-y-4">
+          {rows.map((item) => (
+            <ResultCard key={`${item.code}-${item.eventDate}`} item={item} />
+          ))}
+
+          {!searchLoading && rows.length === 0 ? (
+            <div className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 p-10 text-center text-sm text-slate-500">
+              로그인 후 종목명이나 종목코드를 검색하면 핵심 값만 보여준다.
+            </div>
+          ) : null}
         </div>
       </div>
     </div>
